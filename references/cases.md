@@ -17,9 +17,10 @@
 
 ## 레시피: 로그에서 모르던 유입 출처 찾기
 
-1. `tally.py <로그> --field 2 --unwrap --extract url --collapse-digits --all --sort asc` 로 전체 꼬리를 본다
-   (글 ID가 쿼리에 있으면 `--extract urlq`).
-2. 알려진 검색·소셜·봇 호스트를 `--ignore`로 걷어낸다. 구체적으로 쓴다(`search.naver.com`, `l.facebook.com`).
+1. `tally.py <로그> --field 2 --unwrap --extract urlq --ignore-known --collapse-digits --all --sort asc --examples`
+   로 전체 꼬리를 적은 것부터 본다. `urlq`는 글 ID가 쿼리에 있는 주소(`item?id=`, `PostView?logNo=`)도 살리고,
+   `--examples`는 정규화되기 전의 원본 URL을 보여 준다(보고용).
+2. `--ignore-known`이 못 거른 호스트(검색·소셜·봇)를 `--ignore`로 더 걷어낸다. 구체적으로 쓴다(`search.naver.com`).
    `naver.com`처럼 쓰면 `blog.naver.com`의 글까지 사라진다.
 3. 스팸 패턴(`word-word-숫자.tld`, `news-portal-숫자`)을 `--ignore-regex`로 걷어낸다.
 4. 남은 것 중 **경로가 있는 글 URL**(블로그·커뮤니티·포럼)을 후보로 삼는다.
@@ -29,11 +30,20 @@
 ## 레시피: 표기가 다를 수 있는 언급을 전부 찾기
 
 1. 용어, 음역(한글 표기), 브랜드명, 사용자의 말투를 모은다(`variants.py`).
-2. `normscan.py <폴더> --term 도메인 --term 음역 --term 브랜드명` 으로 전수 스캔한다. 상태는 '일치', '비슷한 이름',
+2. `normscan.py <폴더> --term 도메인 --term 음역 --term 브랜드명 --follow-maps --files-only` 로 전수 스캔한다
+   (경로 목록만 필요하면 `--files-only`, 단축 링크 체인은 `--follow-maps`). 상태는 '일치', '비슷한 이름',
    '용어 일치(문맥 확인 필요)'로 나온다.
 3. `variants.py <도메인> --regex` 의 정규식을 `grep -P`나 코드에 써서 보조 확인한다.
 4. 단축 링크·짧은 ID가 있으면 매핑 파일에서 최종 목적지를 확인하고, 출발 문서까지 되짚는다(연결).
 5. '비슷한 이름'은 제외 목록에 이유와 함께 적는다(접두·접미·다른 TLD·하위 도메인 위장·호모글리프).
+
+## 레시피: 삭제·이동·이름이 바뀐 코드나 기능 찾기
+
+1. `gittrace.py <저장소> --find 단어` 로 이름에 단어가 든 **삭제된 정의** 후보를 본다. 이름이 비슷한 옛 코드가 여럿일 수 있다.
+2. 후보마다 `gittrace.py <저장소> --symbol 이름` 으로 삭제 → 이동 → 이름 변경 체인을 따라간다.
+   내용 유사도가 높은 것이 같은 기능이고, 낮으면 이름만 비슷한 다른 기능이다.
+3. 끝의 `[현재 위치]`(HEAD의 파일·줄)를 확인하고, 체인 중간 커밋의 메시지·변경 로그에서 이유를 찾는다.
+   변경 로그는 같은 말을 다른 표현으로 쓸 수 있다("legacy exporter" → "old comma-separated exporter").
 
 ## 사례 추가 형식
 

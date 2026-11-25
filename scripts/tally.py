@@ -27,13 +27,15 @@
                            (naver.com 을 넣으면 blog.naver.com 의 글도 사라진다)
   --ignore-regex PAT       정규식과 일치하는 항목 제외(여러 번 지정 가능)
   --expect a,b             예상 항목(같은 규칙으로 비교). 목록에 없는 항목에 NEW 를 붙인다
+  --ignore-known           흔한 검색엔진·소셜 공유·SEO 봇 호스트를 미리 제외(KNOWN_NOISE 목록 참고)
+  --examples               집계 키는 정규화(소문자, 스킴·www 제거)돼 있으므로, 보고용 원본 URL을 항목마다 한 줄 보여 준다
 
 출력:
   기본은 상위 20개 + 꼬리 중 눈여겨볼 항목 30개. 꼬리를 끝까지 보려면 --all,
   건수가 적은 것부터 보려면 --sort asc.
 
 예:
-  tally.py access.log --field 2 --unwrap --extract url --collapse-digits --all --sort asc
+  tally.py access.log --field 2 --unwrap --extract urlq --collapse-digits --ignore-known --all --sort asc --examples
   tally.py referrers.txt --ignore google.com,bing.com --ignore-regex 'news-portal-#'
   tally.py ref.csv --extract col:3 --sep , --expect google.com,bing.com
 """
@@ -60,6 +62,12 @@ URL_TOKEN = re.compile(r"https?://[^\s\"'<>]+")
 REDIR_PARAM = re.compile(r"[?&](?:%s)=([^&#\s]+)" % "|".join(REDIR_KEYS))
 QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 DIRECT = "(직접 방문)"
+# --ignore-known 이 걷어내는 흔한 노이즈. 하위 도메인까지 제외되므로 글 URL이 있는 블로그·커뮤니티는 넣지 않았다.
+KNOWN_NOISE = [
+    "google.com", "google.co.kr", "bing.com", "search.naver.com", "search.daum.net", "duckduckgo.com",
+    "search.yahoo.com", "ecosia.org", "l.facebook.com", "lm.facebook.com", "t.co", "l.instagram.com",
+    "semrush.com", "ahrefs.com", "majestic.com", "translate.goog", "mail.google.com", "localhost", "127.0.0.1",
+]
 
 
 def unwrap_url(u):
@@ -167,7 +175,11 @@ def main():
     ap.add_argument("--expect", default="", help="예상 항목(쉼표). 목록에 없는 항목에 NEW 표시")
     ap.add_argument("--expect-file", default=None, help="예상 항목 목록 파일(줄 단위)")
     ap.add_argument("--ignore", default="", help="제외할 항목(쉼표, 호스트 접미 일치)")
-    ap.add_argument("--ignore-regex", action="append", default=[], help="제외할 정규식(반복 가능)")
+    ap.add_argument("--ignore-regex", action="append", default=[],
+                    help="제외할 정규식(반복 가능). --collapse-digits/--normalize 가 끝난 뒤의 키에 적용된다")
+    ap.add_argument("--ignore-known", action="store_true",
+                    help="흔한 검색엔진·소셜 공유·SEO 봇 호스트를 미리 제외(KNOWN_NOISE 목록)")
+    ap.add_argument("--examples", action="store_true", help="항목마다 원본 URL 예시 한 줄을 함께 출력")
     args = ap.parse_args()
 
     extractor = make_extractor(args.extract, args.sep)
@@ -175,7 +187,7 @@ def main():
     if args.expect_file:
         with open(args.expect_file, encoding="utf-8") as f:
             expect += [l.strip().lower() for l in f if l.strip()]
-    ignore = parse_list(args.ignore)
+    ignore = parse_list(args.ignore) + (KNOWN_NOISE if args.ignore_known else [])
     ignore_rx = [re.compile(p) for p in args.ignore_regex]
     norm = []
     for spec in args.normalize:
@@ -187,6 +199,7 @@ def main():
     src = sys.stdin if args.file == "-" else open(args.file, encoding="utf-8", errors="replace")
     total = skipped = ignored = n_unwrapped = direct = 0
     counter = Counter()
+    examples = {}
     with src:
         for line in src:
             if not line.strip():
@@ -210,6 +223,7 @@ def main():
             if not item:
                 skipped += 1
                 continue
+            url_example = URL_TOKEN.search(line)
             key = item if args.extract.startswith("regex:") else item.lower()
             if args.collapse_digits:  # 호스트 부분만 군집화한다(경로 속 글 ID는 그대로 둔다)
                 host_part, slash, rest = key.partition("/")
@@ -220,6 +234,7 @@ def main():
                 ignored += 1
                 continue
             counter[key] += 1
+            examples.setdefault(key, url_example.group(0) if url_example else line.strip()[:120])
 
     counted = sum(counter.values())
     notes = []
@@ -250,10 +265,14 @@ def main():
 
     top_n = len(counter) if args.all else args.top
     rare_limit = len(counter) if args.all else args.rare_limit
-    ranked = counter.most_common()
-    print(f"\n== 상위 {min(top_n, len(ranked))} ==")
+    # --sort asc 이면 목록 자체를 적은 것부터 정렬한다(--all 과 함께 써도 효과가 나도록).
+    ranked = sorted(counter.items(), key=lambda x: (x[1], x[0])) if args.sort == "asc" else counter.most_common()
+    title = "적은 것부터" if args.sort == "asc" else "상위"
+    print(f"\n== {title} {min(top_n, len(ranked))} ==")
     for k, c in ranked[:top_n]:
         print(f"{c:>7} {c / counted:>6.1%}  {k}  {flag(k, c)}".rstrip())
+        if args.examples:
+            print(f"          예: {examples.get(k, '')}")
 
     top_keys = {k for k, _ in ranked[:top_n]}
     tail = [(k, c) for k, c in counter.items() if k not in top_keys]
@@ -264,6 +283,8 @@ def main():
         print(f"-- 꼬리 중 눈여겨볼 항목 (NEW 또는 드묾, {args.sort}, 최대 {rare_limit}개) --")
         for k, c in flagged[:rare_limit]:
             print(f"{c:>7}  {k}  {flag(k, c)}".rstrip())
+            if args.examples:
+                print(f"          예: {examples.get(k, '')}")
         if len(flagged) > rare_limit:
             print(f"   ... 외 {len(flagged) - rare_limit}개 (--all 로 전부 보기)")
 
